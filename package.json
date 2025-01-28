@@ -1,0 +1,30 @@
+{
+  "name": "acton",
+  "publisher": "acton",
+  "displayName": "acton-lang",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/actonlang/vscode-acton"
+  },
+  "contributes": {
+    "languages": [{
+      "id": "acton",
+      "aliases": ["Acton", "acton"],
+      "extensions": [".act"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "acton",
+      "scopeName": "source.acton",
+      "path": "./syntaxes/acton.tmLanguage"
+    }]
+  }
+}
