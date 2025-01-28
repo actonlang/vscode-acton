@@ -1,0 +1,24 @@
+
+name: Build and Package Extension
+
+on:
+  push:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install vsce
+        run: npm install --global @vscode/vsce
+
+      - name: Package extension
+        run: vsce package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acton-lang.vsix
+          path: '*.vsix'
