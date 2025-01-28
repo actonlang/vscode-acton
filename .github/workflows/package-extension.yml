@@ -1,72 +1,62 @@
-name: Build & Package VS Code Extension
-
+name: Build and Package Extension
 on:
   push:
-    branches: [ main ]
+    branches:
+      - '**'
     tags:
-      - 'v*' # Push events to tags matching v*, i.e. v1.0, v20.15.10
-  pull_request:
-    branches: [ main ]
-
+      - 'v*.*.*'
 jobs:
-  build:
+  build-package:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [16.x]
-
     steps:
-    - uses: actions/checkout@v3
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
+      - name: Install vsce
+        run: npm install --global @vscode/vsce
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Package extension
+        run: vsce package
 
-    - name: Install vsce
-      run: npm install -g @vscode/vsce
+      - name: Get VSIX path
+        id: get-vsix
+        run: |
+          VSIX_PATH=$(ls *.vsix)
+          echo "VSIX_PATH=$VSIX_PATH" >> $GITHUB_OUTPUT
+          echo "Found VSIX at $VSIX_PATH"
 
-    - name: Build
-      run: npm run build
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acton-lang.vsix
+          path: ${{ steps.get-vsix.outputs.VSIX_PATH }}
 
-    - name: Run tests
-      run: npm test
+      # Only create release and publish on version tags
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
 
-    - name: Package Extension
-      run: vsce package
+      - name: Upload Release Asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ steps.get-vsix.outputs.VSIX_PATH }}
+          asset_name: acton-lang.vsix
+          asset_content_type: application/octet-stream
 
-    - name: Get Extension Information
-      id: get-extension-info
-      run: |
-        VSIX_PATH=$(ls *.vsix)
-        echo "VSIX_PATH=$VSIX_PATH" >> $GITHUB_ENV
-        echo "VSIX_NAME=$(basename $VSIX_PATH)" >> $GITHUB_ENV
-
-    - name: Upload artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: extension
-        path: ${{ env.VSIX_PATH }}
-
-    # Create GitHub Release when a tag is pushed
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ${{ env.VSIX_PATH }}
-        name: Release ${{ github.ref_name }}
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-
-    # Publish to VS Code Marketplace when a tag is pushed
-    - name: Publish to Marketplace
-      if: startsWith(github.ref, 'refs/tags/')
-      run: vsce publish -p ${{ secrets.VSCE_PAT }}
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      - name: Publish to Marketplace
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: vsce publish -p ${{ secrets.VSCE_PAT }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
