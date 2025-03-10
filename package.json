@@ -3,7 +3,9 @@
   "publisher": "acton",
   "displayName": "Acton",
   "description": "Acton language support",
-  "version": "0.1.1",
+  "license": "BSD-3-Clause",
+  "icon": "images/logo-notext.png",
+  "version": "0.1.2",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -19,7 +21,11 @@
       "id": "acton",
       "aliases": ["Acton", "acton"],
       "extensions": [".act"],
-      "configuration": "./language-configuration.json"
+      "configuration": "./language-configuration.json",
+      "icon": {
+        "light": "images/logo-notext.svg",
+        "dark": "images/logo-notext.svg"
+      }
     }],
     "grammars": [{
       "language": "acton",
