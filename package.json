@@ -29,6 +29,12 @@
           "type": "string",
           "default": "lsp-server-acton",
           "description": "Path to the Acton language server executable"
+        },
+        "acton.lsp.debounce": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "description": "Debounce editor changes before parsing (milliseconds)"
         }
       }
     },

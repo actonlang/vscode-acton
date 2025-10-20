@@ -8,6 +8,8 @@ let client: LanguageClient | undefined;
 export function activate(context: vscode.ExtensionContext) {
   const cfg = vscode.workspace.getConfiguration('acton.lsp');
   let serverCmd = cfg.get<string>('serverPath', 'lsp-server-acton');
+  // Debounce in milliseconds
+  const debounceMs = cfg.get<number>('debounce', 200);
 
   if (!path.isAbsolute(serverCmd) && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
     const wsRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
@@ -20,7 +22,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'acton' }],
-    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.act') }
+    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.act') },
+    initializationOptions: { debounceMs }
   };
 
   client = new LanguageClient('actonLanguageServer', 'Acton Language Server', serverOptions, clientOptions);
@@ -31,4 +34,3 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate(): Thenable<void> | undefined {
   return client?.stop();
 }
-
