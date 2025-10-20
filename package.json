@@ -9,6 +9,10 @@
   "engines": {
     "vscode": "^1.96.0"
   },
+  "activationEvents": [
+    "onLanguage:acton"
+  ],
+  "main": "./out/extension.js",
   "categories": [
     "Programming Languages"
   ],
@@ -17,6 +21,23 @@
     "url": "https://github.com/actonlang/vscode-acton"
   },
   "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Acton Language Server",
+      "properties": {
+        "acton.lsp.serverPath": {
+          "type": "string",
+          "default": "lsp-server-acton",
+          "description": "Path to the Acton language server executable"
+        },
+        "acton.lsp.debounce": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "description": "Debounce editor changes before parsing (milliseconds)"
+        }
+      }
+    },
     "languages": [{
       "id": "acton",
       "aliases": ["Acton", "acton"],
@@ -32,5 +53,20 @@
       "scopeName": "source.acton",
       "path": "./syntaxes/acton.tmLanguage"
     }]
+  }
+  ,
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "echo Preparing for publish"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.0.0"
   }
 }

@@ -16,6 +16,11 @@ Install from the VS Code Extension marketplace.
 
 ## Release Notes
 
+### 0.2.0
+
+Add basic LSP server. It supports displaying parser diagnostics, i.e. syntax
+errors, as tooltips and integrates overall in VS Code for parser errors.
+
 ### 0.1.2
 
 Add language default icons for .act files, extension logo.
