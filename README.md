@@ -1,6 +1,6 @@
 # Acton language extension for Visual Studio Code
 
-![Acton Logo](images/Acton-logo.svg)
+![Acton Logo](images/Acton-logo.png)
 
 Official editor support for the [Acton Language](http://www.acton-lang.org).
 
