@@ -4,17 +4,32 @@
 
 Official editor support for the [Acton Language](http://www.acton-lang.org).
 
-Provides syntax highlighting.
+Provides syntax highlighting and optional managed Acton installation.
 
 
 ## Features
-- syntax highlighting
+- Syntax highlighting
+- Managed Acton installation (Linux/macOS)
+  - Install from GitHub Releases: choose `latest` (stable) or `tip` (prerelease)
+  - Stores binaries under the extension's global storage
+  - Status bar shows the installed version
+  - Commands: Install/Update, Use System Binary, Show Binary Info, Remove
 
 ## Install
 
 Install from the VS Code Extension marketplace.
 
 ## Release Notes
+
+### 0.3.0
+
+- Add managed Acton installation and updater
+  - Download from GitHub Releases (Linux/macOS)
+  - Channel selection: `latest` (stable) or `tip` (prerelease)
+  - Update check on startup; configurable via `acton.autoUpdate` (default: `ask`)
+  - Uses managed `lsp-server-acton` automatically when default server path is configured
+  - Status bar shows installed version
+  - New commands: Install/Update, Use System Binary, Show Binary Info, Remove
 
 ### 0.2.0
 
