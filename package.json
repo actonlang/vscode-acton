@@ -5,7 +5,7 @@
   "description": "Acton language support",
   "license": "BSD-3-Clause",
   "icon": "images/logo-notext.png",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "engines": {
     "vscode": "^1.96.0"
   },

@@ -22,6 +22,13 @@ Install from the VS Code Extension marketplace.
 
 ## Release Notes
 
+### 0.3.1
+
+- Daily update re-check and tip build comparison
+  - Re-check for new releases once per day while VS Code is open
+  - For `tip`, compare a build identifier derived from releases
+  - Persist build identifier in the managed install manifest
+
 ### 0.3.0
 
 - Add managed Acton installation and updater
