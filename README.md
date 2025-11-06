@@ -15,6 +15,9 @@ Provides syntax highlighting and optional managed Acton installation.
   - Status bar shows the installed version
   - Commands: Install/Update, Use System Binary, Show Binary Info, Remove
   - Update checks run on startup; both latest and tip are rechecked once per day while VS Code is open
+- Build and run
+  - Command: Acton: Build Active File
+  - Command: Acton: Run Active File (builds first, then runs)
 
 ## Install
 

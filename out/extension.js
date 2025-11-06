@@ -41,6 +41,7 @@ const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const installer_1 = require("./installer");
 const platform_1 = require("./platform");
+const child_process_1 = require("child_process");
 let client;
 function activate(context) {
     const log = vscode.window.createOutputChannel('Acton');
@@ -206,6 +207,161 @@ function activate(context) {
         context.subscriptions.push({ dispose: () => clearInterval(timer) });
     }
     catch { }
+    // -------- Build / Run Active File --------
+    function findProjectRoot(startPath) {
+        try {
+            let dir = startPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!dir)
+                return undefined;
+            let prev = '';
+            while (dir !== prev) {
+                const candidates = ['Acton.toml'];
+                for (const f of candidates) {
+                    try {
+                        if (fs.statSync(path.join(dir, f)).isFile())
+                            return dir;
+                    }
+                    catch { }
+                }
+                prev = dir;
+                dir = path.dirname(dir);
+            }
+        }
+        catch { }
+        return undefined;
+    }
+    function moduleNameFromFile(root, filePath) {
+        const rel = path.relative(root, filePath);
+        const parts = rel.split(path.sep);
+        const idx = parts.indexOf('src');
+        if (idx >= 0 && idx + 1 < parts.length) {
+            const sub = parts.slice(idx + 1).join('/');
+            const baseNoExt = sub.replace(/\.act$/i, '');
+            return baseNoExt.replace(/\//g, '.');
+        }
+        return undefined;
+    }
+    function computeProgramForEditor(wsRoot) {
+        const ed = vscode.window.activeTextEditor;
+        if (!ed || ed.document.languageId !== 'acton')
+            return {};
+        const filePath = ed.document.fileName;
+        const root = findProjectRoot(path.dirname(filePath)) || wsRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const cwd = root || path.dirname(filePath);
+        if (root) {
+            const mod = moduleNameFromFile(root, filePath);
+            if (mod)
+                return { program: path.join(root, 'out', 'bin', mod), cwd };
+        }
+        // Fallback: binary next to source without extension
+        const dir = path.dirname(filePath);
+        const base = path.basename(filePath, path.extname(filePath));
+        return { program: path.join(dir, base), cwd };
+    }
+    function getActonCmd() {
+        const toolsCfg = vscode.workspace.getConfiguration('acton.tools');
+        const p = toolsCfg.get('actonPath', 'acton');
+        if ((!p || p === 'acton') && manageInstallation && managed?.actonPath)
+            return managed.actonPath;
+        return p || 'acton';
+    }
+    async function buildActiveFile() {
+        const ed = vscode.window.activeTextEditor;
+        if (!ed || ed.document.languageId !== 'acton') {
+            vscode.window.showErrorMessage('Open an Acton (.act) file first.');
+            return false;
+        }
+        const actonCmd = getActonCmd();
+        const file = ed.document.fileName;
+        const cwd = findProjectRoot(path.dirname(file)) || path.dirname(file);
+        const out = log;
+        out.clear();
+        out.appendLine(`$ ${actonCmd} "${file}"`);
+        out.show(true);
+        return new Promise((resolve) => {
+            const proc = (0, child_process_1.spawn)(actonCmd, [file], { cwd });
+            proc.stdout.on('data', d => out.append(d.toString()));
+            proc.stderr.on('data', d => out.append(d.toString()));
+            proc.on('close', (code) => {
+                if (code === 0)
+                    out.appendLine('Build succeeded.');
+                else
+                    out.appendLine(`Build failed with exit code ${code}.`);
+                resolve(code === 0);
+            });
+            proc.on('error', (e) => {
+                out.appendLine(`Failed to spawn '${actonCmd}': ${e}`);
+                resolve(false);
+            });
+        });
+    }
+    async function runActiveFile() {
+        const ed = vscode.window.activeTextEditor;
+        if (!ed || ed.document.languageId !== 'acton') {
+            vscode.window.showErrorMessage('Open an Acton (.act) file first.');
+            return;
+        }
+        const ok = await buildActiveFile();
+        if (!ok)
+            return;
+        const def = computeProgramForEditor();
+        if (!def.program) {
+            vscode.window.showErrorMessage('Could not determine program path for this .act file (is it under src/?).');
+            return;
+        }
+        const term = vscode.window.createTerminal({ name: 'Acton Run' });
+        term.show(true);
+        const quoted = def.program.includes(' ') ? `"${def.program}"` : def.program;
+        if (def.cwd)
+            term.sendText(`cd ${def.cwd.replace(/\s/g, '\\ ')}`);
+        term.sendText(quoted);
+    }
+    context.subscriptions.push(vscode.commands.registerCommand('acton.buildActiveFile', buildActiveFile));
+    context.subscriptions.push(vscode.commands.registerCommand('acton.runActiveFile', runActiveFile));
+    // -------- Debug (Run) integration via a delegating 'acton' type --------
+    const actonDebugProvider = {
+        provideDebugConfigurations(folder, _token) {
+            const wsRoot = folder?.uri.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const def = computeProgramForEditor(wsRoot);
+            const cfg = {
+                name: 'Acton',
+                type: 'acton',
+                request: 'launch',
+                program: def.program,
+                cwd: def.cwd || wsRoot
+            };
+            log.appendLine('[run] provideDebugConfigurations for Acton');
+            return [cfg];
+        },
+        async resolveDebugConfiguration(folder, config, _token) {
+            // We delegate to lldb-dap after ensuring build and program path
+            log.appendLine(`[run] resolveDebugConfiguration (noDebug=${!!config?.noDebug})`);
+            log.show(true);
+            const ok = await buildActiveFile();
+            if (!ok)
+                return undefined;
+            const wsRoot = folder?.uri.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const def = computeProgramForEditor(wsRoot);
+            if (!def.program) {
+                vscode.window.showErrorMessage('Could not determine program path for this .act file.');
+                return undefined;
+            }
+            const lldbCfg = {
+                name: 'Acton',
+                type: 'lldb-dap',
+                request: 'launch',
+                program: def.program,
+                cwd: def.cwd || wsRoot,
+                console: 'integratedTerminal',
+                internalConsoleOptions: 'neverOpen',
+                noDebug: !!config?.noDebug
+            };
+            await vscode.debug.startDebugging(folder, lldbCfg);
+            // Cancel the original 'acton' debug session
+            return undefined;
+        }
+    };
+    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('acton', actonDebugProvider));
     // Start language client
     const serverExecutable = { command: serverCmd, args: [] };
     const serverOptions = { run: serverExecutable, debug: serverExecutable };

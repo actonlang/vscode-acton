@@ -12,6 +12,10 @@
   "activationEvents": [
     "onLanguage:acton",
     "onStartupFinished",
+    "onDebugResolve:acton",
+    "onDebugInitialConfigurations:acton",
+    "onCommand:acton.buildActiveFile",
+    "onCommand:acton.runActiveFile",
     "onCommand:acton.installOrUpdate",
     "onCommand:acton.useSystemBinary",
     "onCommand:acton.showBinaryInfo",
@@ -27,6 +31,14 @@
   },
   "contributes": {
     "commands": [
+      {
+        "command": "acton.buildActiveFile",
+        "title": "Acton: Build Active File"
+      },
+      {
+        "command": "acton.runActiveFile",
+        "title": "Acton: Run Active File"
+      },
       {
         "command": "acton.installOrUpdate",
         "title": "Acton: Install or Update (Managed)"
@@ -48,6 +60,11 @@
       "type": "object",
       "title": "Acton Language Server",
       "properties": {
+        "acton.tools.actonPath": {
+          "type": "string",
+          "default": "acton",
+          "description": "Path to the Acton CLI executable used to build and run. Set an absolute path if your VS Code PATH does not include 'acton'."
+        },
         "acton.manageInstallation": {
           "type": "boolean",
           "default": true,
@@ -92,7 +109,30 @@
       "language": "acton",
       "scopeName": "source.acton",
       "path": "./syntaxes/acton.tmLanguage"
-    }]
+    }],
+    "debuggers": [
+      {
+        "type": "acton",
+        "label": "Acton",
+        "languages": ["acton"]
+      }
+    ],
+    
+    "menus": {
+      "editor/title": [
+        {
+          "command": "acton.runActiveFile",
+          "when": "resourceLangId == acton",
+          "group": "navigation@1"
+        },
+        {
+          "command": "acton.buildActiveFile",
+          "when": "resourceLangId == acton",
+          "group": "navigation@2"
+        }
+      ]
+    }
+    
   }
   ,
   "scripts": {
@@ -108,5 +148,8 @@
     "@types/vscode": "^1.96.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.0.0"
-  }
+  },
+  "extensionDependencies": [
+    "llvm-vs-code-extensions.lldb-dap"
+  ]
 }
