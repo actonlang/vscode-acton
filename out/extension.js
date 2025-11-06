@@ -1,0 +1,251 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.activate = activate;
+exports.deactivate = deactivate;
+const vscode = __importStar(require("vscode"));
+const node_1 = require("vscode-languageclient/node");
+const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
+const installer_1 = require("./installer");
+let client;
+function activate(context) {
+    const log = vscode.window.createOutputChannel('Acton');
+    context.subscriptions.push(log);
+    const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    status.command = 'acton.showBinaryInfo';
+    status.tooltip = 'Acton toolchain status';
+    status.hide();
+    context.subscriptions.push(status);
+    function showStatus(text) {
+        if (text) {
+            status.text = text;
+            status.show();
+        }
+        else
+            status.hide();
+    }
+    function statusLabel(info) {
+        if (!info)
+            return undefined;
+        const ver = (info.displayVersion || info.version || '').trim();
+        const showTip = info.channel === 'tip' && ver.toLowerCase() !== 'tip';
+        return `Acton ${ver} (managed${showTip ? ' tip' : ''})`;
+    }
+    // Read settings
+    const cfgInstall = vscode.workspace.getConfiguration('acton');
+    const manageInstallation = cfgInstall.get('manageInstallation', true) ?? true;
+    const releaseChannel = cfgInstall.get('releaseChannel', 'latest') ?? 'latest';
+    const autoUpdate = cfgInstall.get('autoUpdate', 'ask') ?? 'ask';
+    // Resolve language server path
+    const cfg = vscode.workspace.getConfiguration('acton.lsp');
+    let serverCmd = cfg.get('serverPath', 'lsp-server-acton');
+    const debounceMs = cfg.get('debounce', 200);
+    if (!path.isAbsolute(serverCmd) && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        const wsRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+        const localServer = path.join(wsRoot, 'dist', 'bin', 'lsp-server-acton');
+        if (fs.existsSync(localServer))
+            serverCmd = localServer;
+    }
+    // Managed install handling
+    let managed = (0, installer_1.readInstallInfo)(context.globalStorageUri);
+    if (managed) {
+        (0, installer_1.ensureDisplayVersion)(context, managed).then(updated => {
+            managed = updated;
+            const lbl = statusLabel(managed);
+            if (lbl)
+                showStatus(lbl);
+        }).catch(() => { });
+    }
+    function which(cmd) {
+        const envPath = (process.env.PATH || '').split(path.delimiter);
+        for (const d of envPath) {
+            const c = path.join(d, cmd);
+            try {
+                if (fs.existsSync(c) && fs.statSync(c).isFile())
+                    return c;
+            }
+            catch { }
+        }
+        return undefined;
+    }
+    // If nothing found and allowed, offer managed install
+    if (manageInstallation && !managed && !which('acton')) {
+        vscode.window.showInformationMessage('Acton not found in PATH. Install a managed Acton toolchain?', 'Install latest', 'Install tip', 'Skip').then(async (sel) => {
+            try {
+                if (sel === 'Install latest') {
+                    managed = await (0, installer_1.installOrUpdate)(context, 'latest');
+                    const lbl = statusLabel(managed);
+                    if (lbl)
+                        showStatus(lbl);
+                }
+                else if (sel === 'Install tip') {
+                    managed = await (0, installer_1.installOrUpdate)(context, 'tip');
+                    const lbl = statusLabel(managed);
+                    if (lbl)
+                        showStatus(lbl);
+                }
+            }
+            catch (e) {
+                vscode.window.showErrorMessage(`Acton install failed: ${e?.message || e}`);
+            }
+        });
+    }
+    // If managed and default server path, use managed LSP
+    const isDefaultServerPath = (p) => !p || p === 'lsp-server-acton';
+    if (managed && manageInstallation) {
+        const lbl0 = statusLabel(managed);
+        if (lbl0)
+            showStatus(lbl0);
+        if (isDefaultServerPath(serverCmd) && managed.lspPath)
+            serverCmd = managed.lspPath;
+        // One-time update check on startup
+        const chan = managed.channel || releaseChannel;
+        (0, installer_1.getRelease)(chan).then(r => {
+            const remoteVer = r.tag_name.replace(/^v/, '');
+            if (remoteVer && remoteVer !== managed?.version) {
+                if (autoUpdate === 'auto') {
+                    (0, installer_1.installOrUpdate)(context, chan).then(async (info) => {
+                        managed = info;
+                        const lbl = statusLabel(info);
+                        if (lbl)
+                            showStatus(lbl);
+                        vscode.window.showInformationMessage(`Updated Acton to ${info.displayVersion || info.version}${info.channel === 'tip' ? ' (tip)' : ''}.`);
+                    }).catch(e => vscode.window.showErrorMessage(`Acton auto-update failed: ${e?.message || e}`));
+                }
+                else if (autoUpdate === 'ask') {
+                    const rem = remoteVer.toLowerCase() === 'tip' ? 'tip' : remoteVer;
+                    vscode.window.showInformationMessage(`Acton ${rem} is available. Update now?`, 'Update', 'Later').then(sel => {
+                        if (sel === 'Update') {
+                            (0, installer_1.installOrUpdate)(context, chan).then(async (info) => {
+                                managed = info;
+                                const lbl = statusLabel(info);
+                                if (lbl)
+                                    showStatus(lbl);
+                                vscode.window.showInformationMessage(`Updated Acton to ${info.displayVersion || info.version}${info.channel === 'tip' ? ' (tip)' : ''}.`);
+                            }).catch(e => vscode.window.showErrorMessage(`Acton update failed: ${e?.message || e}`));
+                        }
+                    });
+                }
+            }
+        }).catch(() => { });
+    }
+    else {
+        showStatus(undefined);
+    }
+    // Start language client
+    const serverExecutable = { command: serverCmd, args: [] };
+    const serverOptions = { run: serverExecutable, debug: serverExecutable };
+    const clientOptions = {
+        documentSelector: [{ scheme: 'file', language: 'acton' }],
+        synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.act') },
+        initializationOptions: { debounceMs }
+    };
+    client = new node_1.LanguageClient('actonLanguageServer', 'Acton Language Server', serverOptions, clientOptions);
+    context.subscriptions.push(client);
+    client.start();
+    // Commands for managed installation
+    context.subscriptions.push(vscode.commands.registerCommand('acton.installOrUpdate', async () => {
+        try {
+            const pick = await vscode.window.showQuickPick([
+                { label: 'Latest (stable)', value: 'latest' },
+                { label: 'Tip (prerelease)', value: 'tip' }
+            ], { title: 'Install Acton release channel' });
+            if (!pick)
+                return;
+            const info = await (0, installer_1.installOrUpdate)(context, pick.value);
+            managed = info;
+            const lbl = statusLabel(info);
+            if (lbl)
+                showStatus(lbl);
+            vscode.window.showInformationMessage(`Installed Acton ${info.displayVersion || info.version}${info.channel === 'tip' ? ' (tip)' : ''}.`);
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Acton install/update failed: ${e?.message || e}`);
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('acton.useSystemBinary', async () => {
+        try {
+            const confLsp = vscode.workspace.getConfiguration('acton.lsp');
+            await confLsp.update('serverPath', 'lsp-server-acton', vscode.ConfigurationTarget.Global);
+            vscode.window.showInformationMessage('Configured to use system Acton language server (lsp-server-acton).');
+            showStatus(undefined);
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Failed to switch to system binary: ${e?.message || e}`);
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('acton.showBinaryInfo', async () => {
+        const lines = [];
+        lines.push('Acton — Managed Binary Info');
+        lines.push('');
+        lines.push(`Managed install: ${managed ? 'present' : 'none'}`);
+        if (managed) {
+            const ver = managed.displayVersion || managed.version;
+            const suffix = managed.channel === 'tip' && (ver || '').toLowerCase() !== 'tip' ? ' (tip)' : '';
+            lines.push(`version:`);
+            lines.push(`  ${ver}${suffix}`);
+            lines.push('installDir:');
+            lines.push(`  ${managed.installDir}`);
+            lines.push('actonPath:');
+            lines.push(`  ${managed.actonPath}`);
+            if (managed.lspPath) {
+                lines.push('lspPath:');
+                lines.push(`  ${managed.lspPath}`);
+            }
+        }
+        log.clear();
+        log.appendLine(lines.join('\n'));
+        log.show(true);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('acton.removeManagedBinary', async () => {
+        const ok = await vscode.window.showWarningMessage('Remove managed Acton installation?', { modal: true }, 'Remove');
+        if (ok !== 'Remove')
+            return;
+        try {
+            await (0, installer_1.removeManagedInstall)(context.globalStorageUri);
+            managed = undefined;
+            showStatus(undefined);
+            vscode.window.showInformationMessage('Removed managed Acton installation.');
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Failed to remove managed install: ${e?.message || e}`);
+        }
+    }));
+}
+function deactivate() {
+    return client?.stop();
+}
+//# sourceMappingURL=extension.js.map

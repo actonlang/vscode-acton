@@ -10,7 +10,12 @@
     "vscode": "^1.96.0"
   },
   "activationEvents": [
-    "onLanguage:acton"
+    "onLanguage:acton",
+    "onStartupFinished",
+    "onCommand:acton.installOrUpdate",
+    "onCommand:acton.useSystemBinary",
+    "onCommand:acton.showBinaryInfo",
+    "onCommand:acton.removeManagedBinary"
   ],
   "main": "./out/extension.js",
   "categories": [
@@ -21,10 +26,45 @@
     "url": "https://github.com/actonlang/vscode-acton"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "acton.installOrUpdate",
+        "title": "Acton: Install or Update (Managed)"
+      },
+      {
+        "command": "acton.useSystemBinary",
+        "title": "Acton: Use System Binary"
+      },
+      {
+        "command": "acton.showBinaryInfo",
+        "title": "Acton: Show Binary Info"
+      },
+      {
+        "command": "acton.removeManagedBinary",
+        "title": "Acton: Remove Managed Binary"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "Acton Language Server",
       "properties": {
+        "acton.manageInstallation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow the extension to download and manage a local Acton toolchain."
+        },
+        "acton.releaseChannel": {
+          "type": "string",
+          "enum": ["latest", "tip"],
+          "default": "latest",
+          "description": "Which release channel to install for managed Acton: 'latest' (stable) or 'tip' (prerelease)."
+        },
+        "acton.autoUpdate": {
+          "type": "string",
+          "enum": ["off", "ask", "auto"],
+          "default": "ask",
+          "description": "How to handle new Acton releases for managed installations."
+        },
         "acton.lsp.serverPath": {
           "type": "string",
           "default": "lsp-server-acton",
