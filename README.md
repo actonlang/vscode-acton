@@ -14,6 +14,7 @@ Provides syntax highlighting and optional managed Acton installation.
   - Stores binaries under the extension's global storage
   - Status bar shows the installed version
   - Commands: Install/Update, Use System Binary, Show Binary Info, Remove
+  - Update checks run on startup; both latest and tip are rechecked once per day while VS Code is open
 
 ## Install
 

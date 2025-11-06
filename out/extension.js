@@ -40,6 +40,7 @@ const node_1 = require("vscode-languageclient/node");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const installer_1 = require("./installer");
+const platform_1 = require("./platform");
 let client;
 function activate(context) {
     const log = vscode.window.createOutputChannel('Acton');
@@ -134,8 +135,11 @@ function activate(context) {
         // One-time update check on startup
         const chan = managed.channel || releaseChannel;
         (0, installer_1.getRelease)(chan).then(r => {
-            const remoteVer = r.tag_name.replace(/^v/, '');
-            if (remoteVer && remoteVer !== managed?.version) {
+            const remoteVer = chan === 'tip'
+                ? ((0, installer_1.computeRemoteBuildId)(r, 'tip', (0, platform_1.detectPlatform)() || undefined) || 'tip')
+                : r.tag_name.replace(/^v/, '');
+            const localVer = chan === 'tip' ? (managed?.buildId || managed?.displayVersion || managed?.version) : managed?.version;
+            if (remoteVer && localVer && remoteVer !== localVer) {
                 if (autoUpdate === 'auto') {
                     (0, installer_1.installOrUpdate)(context, chan).then(async (info) => {
                         managed = info;
@@ -146,7 +150,7 @@ function activate(context) {
                     }).catch(e => vscode.window.showErrorMessage(`Acton auto-update failed: ${e?.message || e}`));
                 }
                 else if (autoUpdate === 'ask') {
-                    const rem = remoteVer.toLowerCase() === 'tip' ? 'tip' : remoteVer;
+                    const rem = chan === 'tip' && remoteVer.toLowerCase() !== 'tip' ? `${remoteVer} (tip)` : remoteVer;
                     vscode.window.showInformationMessage(`Acton ${rem} is available. Update now?`, 'Update', 'Later').then(sel => {
                         if (sel === 'Update') {
                             (0, installer_1.installOrUpdate)(context, chan).then(async (info) => {
@@ -165,12 +169,48 @@ function activate(context) {
     else {
         showStatus(undefined);
     }
+    // Re-check daily (useful for tip and latest)
+    try {
+        const msDay = 24 * 60 * 60 * 1000;
+        const timer = setInterval(() => {
+            try {
+                if (!manageInstallation || !managed)
+                    return;
+                const chan = managed.channel || releaseChannel;
+                (0, installer_1.getRelease)(chan).then(r => {
+                    const remoteVer = chan === 'tip'
+                        ? ((0, installer_1.computeRemoteBuildId)(r, 'tip', (0, platform_1.detectPlatform)() || undefined) || 'tip')
+                        : r.tag_name.replace(/^v/, '');
+                    const localVer = chan === 'tip' ? (managed?.buildId || managed?.displayVersion || managed?.version) : managed?.version;
+                    if (remoteVer && localVer && remoteVer !== localVer) {
+                        if (autoUpdate === 'auto') {
+                            (0, installer_1.installOrUpdate)(context, chan).then(async (info) => {
+                                managed = info;
+                                const lbl = statusLabel(info);
+                                if (lbl)
+                                    showStatus(lbl);
+                            }).catch(() => { });
+                        }
+                        else if (autoUpdate === 'ask') {
+                            const rem = chan === 'tip' && remoteVer.toLowerCase() !== 'tip' ? `${remoteVer} (tip)` : remoteVer;
+                            vscode.window.showInformationMessage(`Acton ${rem} is available. Update now?`, 'Update', 'Later').then(sel => {
+                                if (sel === 'Update')
+                                    vscode.commands.executeCommand('acton.installOrUpdate');
+                            });
+                        }
+                    }
+                }).catch(() => { });
+            }
+            catch { }
+        }, msDay);
+        context.subscriptions.push({ dispose: () => clearInterval(timer) });
+    }
+    catch { }
     // Start language client
     const serverExecutable = { command: serverCmd, args: [] };
     const serverOptions = { run: serverExecutable, debug: serverExecutable };
     const clientOptions = {
         documentSelector: [{ scheme: 'file', language: 'acton' }],
-        synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.act') },
         initializationOptions: { debounceMs }
     };
     client = new node_1.LanguageClient('actonLanguageServer', 'Acton Language Server', serverOptions, clientOptions);

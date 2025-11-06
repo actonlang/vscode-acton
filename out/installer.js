@@ -38,6 +38,7 @@ exports.getRelease = getRelease;
 exports.installOrUpdate = installOrUpdate;
 exports.removeManagedInstall = removeManagedInstall;
 exports.ensureDisplayVersion = ensureDisplayVersion;
+exports.computeRemoteBuildId = computeRemoteBuildId;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
@@ -199,6 +200,8 @@ async function installOrUpdate(context, channel) {
     };
     // Determine a user-friendly display version
     info.displayVersion = await computeDisplayVersion(info, rel);
+    // Build identifier for update comparisons (esp. tip)
+    info.buildId = computeRemoteBuildId(rel, channel, triple) || info.displayVersion || info.version;
     fs.writeFileSync(infoPath(context.globalStorageUri), JSON.stringify(info, null, 2));
     return info;
 }
@@ -262,11 +265,36 @@ async function ensureDisplayVersion(context, info) {
             const disp = await computeDisplayVersion(info, rel);
             if (disp && disp !== info.displayVersion) {
                 info.displayVersion = disp;
+                if (!info.buildId) {
+                    const triple = (0, platform_1.detectPlatform)();
+                    info.buildId = computeRemoteBuildId(rel, info.channel, triple || undefined) || disp || info.version;
+                }
                 fs.writeFileSync(infoPath(context.globalStorageUri), JSON.stringify(info, null, 2));
             }
         }
     }
     catch { }
     return info;
+}
+function computeRemoteBuildId(rel, channel, triple) {
+    if (channel === 'latest')
+        return rel.tag_name?.replace(/^v/, '');
+    const fromDeb = extractVersionFromDebAssets(rel);
+    if (fromDeb)
+        return fromDeb;
+    if (triple) {
+        const prefix = (0, platform_1.assetNamePrefix)(triple);
+        const a = rel.assets.find(x => x.name.startsWith(prefix) && x.name.endsWith('.tar.xz'));
+        if (a?.updated_at)
+            return a.updated_at;
+    }
+    const latest = rel.assets.reduce((acc, a) => {
+        if (!a.updated_at)
+            return acc;
+        if (!acc || a.updated_at > acc)
+            return a.updated_at;
+        return acc;
+    }, undefined);
+    return latest || rel.tag_name;
 }
 //# sourceMappingURL=installer.js.map

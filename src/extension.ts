@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
 import * as path from 'path';
 import * as fs from 'fs';
-import { installOrUpdate, readInstallInfo, removeManagedInstall, Channel, getRelease, ensureDisplayVersion } from './installer';
+import { installOrUpdate, readInstallInfo, removeManagedInstall, Channel, getRelease, ensureDisplayVersion, computeRemoteBuildId } from './installer';
+import { detectPlatform } from './platform';
 
 let client: LanguageClient | undefined;
 
@@ -89,8 +90,11 @@ export function activate(context: vscode.ExtensionContext) {
     // One-time update check on startup
     const chan = managed.channel || releaseChannel;
     getRelease(chan).then(r => {
-      const remoteVer = r.tag_name.replace(/^v/, '');
-      if (remoteVer && remoteVer !== managed?.version) {
+      const remoteVer = chan === 'tip'
+        ? (computeRemoteBuildId(r, 'tip', detectPlatform() || undefined) || 'tip')
+        : r.tag_name.replace(/^v/, '');
+      const localVer = chan === 'tip' ? (managed?.buildId || managed?.displayVersion || managed?.version) : managed?.version;
+      if (remoteVer && localVer && remoteVer !== localVer) {
         if (autoUpdate === 'auto') {
           installOrUpdate(context, chan).then(async info => {
             managed = info;
@@ -99,7 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(`Updated Acton to ${info.displayVersion || info.version}${info.channel === 'tip' ? ' (tip)' : ''}.`);
           }).catch(e => vscode.window.showErrorMessage(`Acton auto-update failed: ${e?.message || e}`));
         } else if (autoUpdate === 'ask') {
-          const rem = remoteVer.toLowerCase() === 'tip' ? 'tip' : remoteVer;
+          const rem = chan === 'tip' && remoteVer.toLowerCase() !== 'tip' ? `${remoteVer} (tip)` : remoteVer;
           vscode.window.showInformationMessage(`Acton ${rem} is available. Update now?`, 'Update', 'Later').then(sel => {
             if (sel === 'Update') {
               installOrUpdate(context, chan).then(async info => {
@@ -117,12 +121,43 @@ export function activate(context: vscode.ExtensionContext) {
     showStatus(undefined);
   }
 
+  // Re-check daily (useful for tip and latest)
+  try {
+    const msDay = 24 * 60 * 60 * 1000;
+    const timer = setInterval(() => {
+      try {
+        if (!manageInstallation || !managed) return;
+        const chan = managed.channel || releaseChannel;
+        getRelease(chan).then(r => {
+          const remoteVer = chan === 'tip'
+            ? (computeRemoteBuildId(r, 'tip', detectPlatform() || undefined) || 'tip')
+            : r.tag_name.replace(/^v/, '');
+          const localVer = chan === 'tip' ? (managed?.buildId || managed?.displayVersion || managed?.version) : managed?.version;
+          if (remoteVer && localVer && remoteVer !== localVer) {
+            if (autoUpdate === 'auto') {
+              installOrUpdate(context, chan).then(async info => {
+                managed = info;
+                const lbl = statusLabel(info);
+                if (lbl) showStatus(lbl);
+              }).catch(() => {});
+            } else if (autoUpdate === 'ask') {
+              const rem = chan === 'tip' && remoteVer.toLowerCase() !== 'tip' ? `${remoteVer} (tip)` : remoteVer;
+              vscode.window.showInformationMessage(`Acton ${rem} is available. Update now?`, 'Update', 'Later').then(sel => {
+                if (sel === 'Update') vscode.commands.executeCommand('acton.installOrUpdate');
+              });
+            }
+          }
+        }).catch(() => {});
+      } catch {}
+    }, msDay);
+    context.subscriptions.push({ dispose: () => clearInterval(timer) });
+  } catch {}
+
   // Start language client
   const serverExecutable: Executable = { command: serverCmd, args: [] };
   const serverOptions: ServerOptions = { run: serverExecutable, debug: serverExecutable };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'acton' }],
-    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.act') },
     initializationOptions: { debounceMs }
   };
   client = new LanguageClient('actonLanguageServer', 'Acton Language Server', serverOptions, clientOptions);
