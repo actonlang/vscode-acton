@@ -9,6 +9,7 @@ Provides syntax highlighting and optional managed Acton installation.
 
 ## Features
 - Syntax highlighting
+- Syntax errors displayed inline with red squiggly line + on-hover tooltip
 - Managed Acton installation (Linux/macOS)
   - Install from GitHub Releases: choose `latest` (stable) or `tip` (prerelease)
   - Stores binaries under the extension's global storage
@@ -16,6 +17,7 @@ Provides syntax highlighting and optional managed Acton installation.
   - Commands: Install/Update, Use System Binary, Show Binary Info, Remove
   - Update checks run on startup; both latest and tip are rechecked once per day while VS Code is open
 - Build and run
+  - Possible to build and run using native VS Code Run button
   - Command: Acton: Build Active File
   - Command: Acton: Run Active File (builds first, then runs)
 
@@ -24,6 +26,14 @@ Provides syntax highlighting and optional managed Acton installation.
 Install from the VS Code Extension marketplace.
 
 ## Release Notes
+
+### 0.4.0
+
+- Build and Run integration
+  - Use VS Code Run button to build then launch via LLDB DAP
+  - Output appears in the integrated terminal
+  - Added editor commands: Build Active File, Run Active File
+  - Requires LLVM "lldb-dap" extension (auto‑prompted by VS Code)
 
 ### 0.3.1
 
