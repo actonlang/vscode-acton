@@ -20,6 +20,7 @@ Provides syntax highlighting and optional managed Acton installation.
   - Possible to build and run using native VS Code Run button
   - Command: Acton: Build Active File
   - Command: Acton: Run Active File (builds first, then runs)
+  - Set breakpoints in .act files and use Run/Debug (lldb-dap)
 
 ## Install
 

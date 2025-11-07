@@ -110,6 +110,11 @@
       "scopeName": "source.acton",
       "path": "./syntaxes/acton.tmLanguage"
     }],
+    "breakpoints": [
+      {
+        "language": "acton"
+      }
+    ],
     "debuggers": [
       {
         "type": "acton",
