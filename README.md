@@ -16,7 +16,7 @@ Provides syntax highlighting and optional managed Acton installation.
   - Status bar shows the installed version
   - Commands: Install/Update, Use System Binary, Show Binary Info, Remove
   - Update checks run on startup; both latest and tip are rechecked once per day while VS Code is open
-- Build and run
+- Build and Run with Debugging
   - Possible to build and run using native VS Code Run button
   - Command: Acton: Build Active File
   - Command: Acton: Run Active File (builds first, then runs)
@@ -27,6 +27,12 @@ Provides syntax highlighting and optional managed Acton installation.
 Install from the VS Code Extension marketplace.
 
 ## Release Notes
+
+### 0.5.0
+
+- Breakpoints in .act files & interactive debugging
+  - Set breakpoints directly in Acton sources and run under LLDB DAP
+  - Supports normal controls to step etc
 
 ### 0.4.0
 
