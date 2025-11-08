@@ -319,6 +319,32 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand('acton.buildActiveFile', buildActiveFile));
     context.subscriptions.push(vscode.commands.registerCommand('acton.runActiveFile', runActiveFile));
     // -------- Debug (Run) integration via a delegating 'acton' type --------
+    function resolveActonBinaryPath() {
+        try {
+            const cmd = getActonCmd();
+            if (path.isAbsolute(cmd))
+                return fs.existsSync(cmd) ? cmd : undefined;
+            const found = which(cmd) || which('acton');
+            if (found)
+                return found;
+        }
+        catch { }
+        return undefined;
+    }
+    function findLldbPluginRelativeToActon() {
+        const actonBin = resolveActonBinaryPath();
+        if (!actonBin)
+            return undefined;
+        try {
+            const binDir = path.dirname(actonBin);
+            const distRoot = path.dirname(binDir);
+            const candidate = path.join(distRoot, 'lldb', 'acton.py');
+            if (fs.existsSync(candidate))
+                return candidate;
+        }
+        catch { }
+        return undefined;
+    }
     const actonDebugProvider = {
         provideDebugConfigurations(folder, _token) {
             const wsRoot = folder?.uri.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -346,6 +372,16 @@ function activate(context) {
                 vscode.window.showErrorMessage('Could not determine program path for this .act file.');
                 return undefined;
             }
+            const initCommands = [];
+            const pluginPath = findLldbPluginRelativeToActon();
+            if (pluginPath) {
+                log.appendLine(`[debug] Importing Acton LLDB plugin: ${pluginPath}`);
+                initCommands.push(`command script import "${pluginPath}"`);
+                initCommands.push('type category enable Acton');
+            }
+            else {
+                log.appendLine('[debug] Acton LLDB plugin not found relative to acton binary');
+            }
             const lldbCfg = {
                 name: 'Acton',
                 type: 'lldb-dap',
@@ -354,7 +390,8 @@ function activate(context) {
                 cwd: def.cwd || wsRoot,
                 console: 'integratedTerminal',
                 internalConsoleOptions: 'neverOpen',
-                noDebug: !!config?.noDebug
+                noDebug: !!config?.noDebug,
+                initCommands
             };
             await vscode.debug.startDebugging(folder, lldbCfg);
             // Cancel the original 'acton' debug session

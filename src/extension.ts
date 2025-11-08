@@ -261,6 +261,29 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(vscode.commands.registerCommand('acton.runActiveFile', runActiveFile));
 
   // -------- Debug (Run) integration via a delegating 'acton' type --------
+  function resolveActonBinaryPath(): string | undefined {
+    try {
+      const cmd = getActonCmd();
+      if (path.isAbsolute(cmd)) return fs.existsSync(cmd) ? cmd : undefined;
+      const found = which(cmd) || which('acton');
+      if (found) return found;
+    } catch {}
+    return undefined;
+  }
+
+  function findLldbPluginRelativeToActon(): string | undefined {
+    const actonBin = resolveActonBinaryPath();
+    if (!actonBin) return undefined;
+    try {
+      const binDir = path.dirname(actonBin);
+      const distRoot = path.dirname(binDir);
+      const candidate = path.join(distRoot, 'lldb', 'acton.py');
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+    return undefined;
+  }
+
+
   const actonDebugProvider: vscode.DebugConfigurationProvider = {
     provideDebugConfigurations(folder, _token) {
       const wsRoot = folder?.uri.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -287,6 +310,16 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('Could not determine program path for this .act file.');
         return undefined;
       }
+      const initCommands: string[] = [];
+      const pluginPath = findLldbPluginRelativeToActon();
+      if (pluginPath) {
+        log.appendLine(`[debug] Importing Acton LLDB plugin: ${pluginPath}`);
+        initCommands.push(`command script import "${pluginPath}"`);
+        initCommands.push('type category enable Acton');
+      } else {
+        log.appendLine('[debug] Acton LLDB plugin not found relative to acton binary');
+      }
+
       const lldbCfg: vscode.DebugConfiguration = {
         name: 'Acton',
         type: 'lldb-dap',
@@ -295,7 +328,8 @@ export function activate(context: vscode.ExtensionContext) {
         cwd: def.cwd || wsRoot,
         console: 'integratedTerminal',
         internalConsoleOptions: 'neverOpen',
-        noDebug: !!config?.noDebug
+        noDebug: !!config?.noDebug,
+        initCommands
       };
       await vscode.debug.startDebugging(folder, lldbCfg);
       // Cancel the original 'acton' debug session
