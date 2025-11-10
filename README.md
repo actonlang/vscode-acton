@@ -28,6 +28,13 @@ Install from the VS Code Extension marketplace.
 
 ## Release Notes
 
+### 0.6.0
+
+- Auto-load Acton LLDB plugin for pretty printing
+  - VS Code now imports the Acton LLDB Python plugin from the Acton distro and enables its type category
+  - No extra settings or paths; works with managed and system installs
+  - Improves variable display in the debugger (DAP)
+
 ### 0.5.0
 
 - Breakpoints in .act files & interactive debugging
