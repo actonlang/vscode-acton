@@ -391,7 +391,9 @@ function activate(context) {
                 console: 'integratedTerminal',
                 internalConsoleOptions: 'neverOpen',
                 noDebug: !!config?.noDebug,
-                initCommands
+                initCommands,
+                // Ask lldb-dap to format frames via our Python formatter (no ANSI colors here)
+                frameFormat: '${script.frame:acton.frame_title}{ at ${file.basename}:${line.number}}\n'
             };
             await vscode.debug.startDebugging(folder, lldbCfg);
             // Cancel the original 'acton' debug session
