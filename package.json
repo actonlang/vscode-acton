@@ -19,7 +19,8 @@
     "onCommand:acton.installOrUpdate",
     "onCommand:acton.useSystemBinary",
     "onCommand:acton.showBinaryInfo",
-    "onCommand:acton.removeManagedBinary"
+    "onCommand:acton.removeManagedBinary",
+    "onCommand:acton.refreshTests"
   ],
   "main": "./out/extension.js",
   "categories": [
@@ -54,6 +55,10 @@
       {
         "command": "acton.removeManagedBinary",
         "title": "Acton: Remove Managed Binary"
+      },
+      {
+        "command": "acton.refreshTests",
+        "title": "Acton: Refresh Tests"
       }
     ],
     "configuration": {
@@ -63,7 +68,12 @@
         "acton.tools.actonPath": {
           "type": "string",
           "default": "acton",
-          "description": "Path to the Acton CLI executable used to build and run. Set an absolute path if your VS Code PATH does not include 'acton'."
+          "description": "Legacy path to the Acton CLI executable. If acton.tools.actoncPath is set, it takes precedence."
+        },
+        "acton.tools.actoncPath": {
+          "type": "string",
+          "default": "actonc",
+          "description": "Path to the Acton compiler (actonc) used for build and test commands."
         },
         "acton.manageInstallation": {
           "type": "boolean",

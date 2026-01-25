@@ -215,7 +215,7 @@ function activate(context) {
                 return undefined;
             let prev = '';
             while (dir !== prev) {
-                const candidates = ['Acton.toml'];
+                const candidates = ['Acton.toml', 'Build.act', 'build.act.json'];
                 for (const f of candidates) {
                     try {
                         if (fs.statSync(path.join(dir, f)).isFile())
@@ -260,11 +260,556 @@ function activate(context) {
     }
     function getActonCmd() {
         const toolsCfg = vscode.workspace.getConfiguration('acton.tools');
-        const p = toolsCfg.get('actonPath', 'acton');
-        if ((!p || p === 'acton') && manageInstallation && managed?.actonPath)
+        const override = toolsCfg.get('actoncPath') || toolsCfg.get('actonPath');
+        const defaultCmd = 'actonc';
+        if ((!override || override === 'acton' || override === 'actonc') && manageInstallation && managed?.actonPath) {
+            try {
+                const binDir = path.dirname(managed.actonPath);
+                const actoncCandidate = path.join(binDir, 'actonc');
+                if (fs.existsSync(actoncCandidate))
+                    return actoncCandidate;
+            }
+            catch { }
             return managed.actonPath;
-        return p || 'acton';
+        }
+        return override || defaultCmd;
     }
+    // -------- Test discovery (VS Code Testing API) --------
+    const testController = vscode.tests.createTestController('actonTests', 'Acton Tests');
+    context.subscriptions.push(testController);
+    const testMeta = new WeakMap();
+    const testIndex = new Map();
+    const testDiagnostics = vscode.languages.createDiagnosticCollection('acton-tests');
+    context.subscriptions.push(testDiagnostics);
+    const diagByKey = new Map();
+    const failDecorationType = vscode.window.createTextEditorDecorationType({
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+        after: {
+            margin: '0 0 0 1rem',
+            color: 'rgb(255, 92, 92)',
+            backgroundColor: 'rgba(255, 92, 92, 0.15)',
+            fontWeight: 'bold'
+        }
+    });
+    context.subscriptions.push(failDecorationType);
+    const decoByKey = new Map();
+    let discoveryInFlight;
+    let refreshTimer;
+    function moduleToFile(root, modName) {
+        const rel = modName.split('.').join(path.sep) + '.act';
+        const full = path.join(root, 'src', rel);
+        try {
+            if (fs.existsSync(full))
+                return vscode.Uri.file(full);
+        }
+        catch { }
+        return undefined;
+    }
+    function parseTestListOutput(text) {
+        const modules = new Map();
+        let current;
+        for (const raw of text.split(/\r?\n/)) {
+            const line = raw.replace(/\s+$/, '');
+            if (!line)
+                continue;
+            const modMatch = line.match(/^Module\s+(.+):$/);
+            if (modMatch) {
+                current = modMatch[1].trim();
+                if (!modules.has(current))
+                    modules.set(current, []);
+                continue;
+            }
+            if (current && /^\s+/.test(line)) {
+                const entry = line.trim();
+                const label = entry.replace(/\s+\([^)]*\)\s*$/, '');
+                modules.get(current).push(label);
+            }
+        }
+        return modules;
+    }
+    async function runActonTestList(cwd) {
+        const actonCmd = getActonCmd();
+        return new Promise((resolve, reject) => {
+            const proc = (0, child_process_1.spawn)(actonCmd, ['test', 'list'], { cwd, env: { ...process.env, NO_COLOR: '1' } });
+            let out = '';
+            let err = '';
+            proc.stdout.on('data', d => { out += d.toString(); });
+            proc.stderr.on('data', d => { err += d.toString(); });
+            proc.on('close', (code) => {
+                if (code === 0)
+                    resolve(out + (err ? '\n' + err : ''));
+                else
+                    reject(new Error(err || out || `acton test list failed with exit code ${code}`));
+            });
+            proc.on('error', (e) => reject(e));
+        });
+    }
+    function hasAnyTestItems() {
+        let has = false;
+        testController.items.forEach(() => { has = true; });
+        return has;
+    }
+    function testIndexKey(project, module, name) {
+        return [project, module || '', name || ''].join('::');
+    }
+    function updateDiagnosticsForUri(uri) {
+        const key = uri.toString();
+        const diags = [];
+        for (const entry of diagByKey.values()) {
+            if (entry.uri.toString() === key)
+                diags.push(entry.diagnostic);
+        }
+        testDiagnostics.set(uri, diags);
+    }
+    function setTestDiagnostic(key, uri, range, message) {
+        const diag = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error);
+        diag.source = 'acton test';
+        diagByKey.set(key, { uri, diagnostic: diag });
+        updateDiagnosticsForUri(uri);
+    }
+    function clearTestDiagnostic(key) {
+        const entry = diagByKey.get(key);
+        if (!entry)
+            return;
+        diagByKey.delete(key);
+        updateDiagnosticsForUri(entry.uri);
+    }
+    function buildTestMessage(text, uri, range) {
+        const msg = new vscode.TestMessage(text);
+        if (uri && range)
+            msg.location = new vscode.Location(uri, range);
+        return msg;
+    }
+    function reapplyStoredFailures(run, currentKeys, currentProjects) {
+        for (const [key, entry] of diagByKey.entries()) {
+            if (currentKeys.has(key))
+                continue;
+            const item = testIndex.get(key);
+            if (!item)
+                continue;
+            const meta = testMeta.get(item);
+            if (!meta?.project || !currentProjects.has(meta.project))
+                continue;
+            const uri = item.uri ?? entry.uri;
+            const range = item.range ?? entry.diagnostic.range;
+            const msg = buildTestMessage(entry.diagnostic.message, uri, range);
+            run.failed(item, msg);
+        }
+    }
+    async function discoverTests(force = false) {
+        if (!force && hasAnyTestItems())
+            return;
+        if (discoveryInFlight)
+            return discoveryInFlight;
+        discoveryInFlight = (async () => {
+            const prevIndex = new Map(testIndex);
+            testIndex.clear();
+            const newRoots = [];
+            const folders = vscode.workspace.workspaceFolders || [];
+            const resetChildren = (item) => {
+                item.children.forEach(child => item.children.delete(child.id));
+            };
+            const upsertItem = (key, create) => {
+                const existing = prevIndex.get(key);
+                if (existing) {
+                    resetChildren(existing);
+                    return existing;
+                }
+                return create();
+            };
+            for (const folder of folders) {
+                const wsRoot = folder.uri.fsPath;
+                const projRoot = findProjectRoot(wsRoot) || wsRoot;
+                const projectFiles = ['Acton.toml', 'Build.act', 'build.act.json'];
+                const hasProjectFile = projectFiles.some(f => {
+                    try {
+                        return fs.existsSync(path.join(projRoot, f));
+                    }
+                    catch {
+                        return false;
+                    }
+                });
+                if (!hasProjectFile)
+                    continue;
+                let output = '';
+                try {
+                    output = await runActonTestList(projRoot);
+                }
+                catch (e) {
+                    log.appendLine(`[test] discovery failed in ${projRoot}: ${e?.message || e}`);
+                    continue;
+                }
+                const modules = parseTestListOutput(output);
+                if (modules.size === 0)
+                    continue;
+                const rootKey = testIndexKey(projRoot);
+                const rootItem = upsertItem(rootKey, () => testController.createTestItem(`acton:${projRoot}`, path.basename(projRoot), vscode.Uri.file(projRoot)));
+                rootItem.label = path.basename(projRoot);
+                testMeta.set(rootItem, { project: projRoot });
+                testIndex.set(rootKey, rootItem);
+                newRoots.push(rootItem);
+                for (const [modName, tests] of modules.entries()) {
+                    const modUri = moduleToFile(projRoot, modName);
+                    const ranges = modUri ? await findTestRangesForFile(modUri) : new Map();
+                    const modKey = testIndexKey(projRoot, modName);
+                    const modItem = upsertItem(modKey, () => testController.createTestItem(`acton:${projRoot}:${modName}`, modName, modUri));
+                    modItem.label = modName;
+                    testMeta.set(modItem, { project: projRoot, module: modName });
+                    testIndex.set(modKey, modItem);
+                    rootItem.children.add(modItem);
+                    for (const testName of tests) {
+                        const testId = `acton:${projRoot}:${modName}:${testName}`;
+                        const testKey = testIndexKey(projRoot, modName, testName);
+                        const testItem = upsertItem(testKey, () => testController.createTestItem(testId, testName, modUri));
+                        testItem.label = testName;
+                        const range = ranges.get(testName);
+                        if (range)
+                            testItem.range = range;
+                        testMeta.set(testItem, { project: projRoot, module: modName, name: testName });
+                        testIndex.set(testKey, testItem);
+                        modItem.children.add(testItem);
+                    }
+                }
+            }
+            testController.items.replace(newRoots);
+        })();
+        try {
+            await discoveryInFlight;
+        }
+        finally {
+            discoveryInFlight = undefined;
+        }
+    }
+    testController.resolveHandler = async () => {
+        await discoverTests(false);
+    };
+    context.subscriptions.push(vscode.commands.registerCommand('acton.refreshTests', async () => {
+        await discoverTests(true);
+    }));
+    function scheduleTestRefresh() {
+        if (refreshTimer)
+            clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+            refreshTimer = undefined;
+            void discoverTests(true);
+        }, 300);
+    }
+    const actWatcher = vscode.workspace.createFileSystemWatcher('**/src/**/*.act');
+    const buildWatcher = vscode.workspace.createFileSystemWatcher('**/Build.act');
+    const buildJsonWatcher = vscode.workspace.createFileSystemWatcher('**/build.act.json');
+    for (const w of [actWatcher, buildWatcher, buildJsonWatcher]) {
+        w.onDidChange(scheduleTestRefresh);
+        w.onDidCreate(scheduleTestRefresh);
+        w.onDidDelete(scheduleTestRefresh);
+        context.subscriptions.push(w);
+    }
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => {
+        if (doc.languageId !== 'acton')
+            return;
+        const projRoot = findProjectRoot(path.dirname(doc.fileName)) || path.dirname(doc.fileName);
+        const modName = moduleNameFromFile(projRoot, doc.fileName);
+        if (!modName)
+            return;
+        void refreshRangesForModule(projRoot, modName, doc.uri);
+    }));
+    function collectLeafTests(items, exclude) {
+        const excluded = new Set(exclude ? Array.from(exclude) : []);
+        const out = [];
+        const visit = (item) => {
+            if (excluded.has(item))
+                return;
+            if (item.children.size === 0) {
+                out.push(item);
+            }
+            else {
+                item.children.forEach(child => visit(child));
+            }
+        };
+        for (const item of items)
+            visit(item);
+        return out;
+    }
+    function parseTestResultsOutput(text) {
+        const result = new Map();
+        let currentModule;
+        let currentTest;
+        let currentStatus;
+        let detailLines = [];
+        const flush = () => {
+            if (currentModule && currentTest) {
+                if (!result.has(currentModule))
+                    result.set(currentModule, new Map());
+                const details = detailLines.join('\n').replace(/\s+$/g, '');
+                result.get(currentModule).set(currentTest, {
+                    status: currentStatus,
+                    details: details.length > 0 ? details : undefined
+                });
+            }
+            currentTest = undefined;
+            currentStatus = undefined;
+            detailLines = [];
+        };
+        for (const raw of text.split(/\r?\n/)) {
+            const line = raw.replace(/\s+$/, '');
+            const modMatch = line.match(/^Tests - module (.+):\s*$/);
+            if (modMatch) {
+                flush();
+                currentModule = modMatch[1].trim();
+                continue;
+            }
+            const testMatch = line.match(/^\s+(.+?):\s+(.*?)\s*:\s*\d+\s+runs in/);
+            if (testMatch) {
+                flush();
+                let name = testMatch[1].trim();
+                let statusRaw = testMatch[2].trim().replace(/\s+/g, ' ');
+                statusRaw = statusRaw.replace(/^CACHED\s+/i, '');
+                statusRaw = statusRaw.replace(/\*$/, '');
+                let moduleForTest = currentModule;
+                if (!moduleForTest) {
+                    const dotIdx = name.indexOf('.');
+                    if (dotIdx > 0) {
+                        moduleForTest = name.slice(0, dotIdx);
+                        name = name.slice(dotIdx + 1);
+                    }
+                }
+                currentModule = moduleForTest;
+                currentTest = name;
+                currentStatus = statusRaw;
+                continue;
+            }
+            const summaryMatch = line.match(/^(All \d+ tests passed|\d+ out of \d+ tests|Nothing to test)/);
+            if (summaryMatch) {
+                flush();
+                currentModule = undefined;
+                continue;
+            }
+            if (currentTest) {
+                detailLines.push(line);
+            }
+        }
+        flush();
+        return result;
+    }
+    function parseJsonReport(text) {
+        const trimmed = text.trim();
+        if (!trimmed)
+            return undefined;
+        try {
+            return JSON.parse(trimmed);
+        }
+        catch { }
+        const first = trimmed.indexOf('{');
+        const last = trimmed.lastIndexOf('}');
+        if (first >= 0 && last > first) {
+            try {
+                return JSON.parse(trimmed.slice(first, last + 1));
+            }
+            catch { }
+        }
+        return undefined;
+    }
+    function statusIsPass(status) {
+        if (!status)
+            return undefined;
+        const up = status.toUpperCase();
+        if (up.includes('FAIL') || up.includes('ERR'))
+            return false;
+        if (up.startsWith('OK'))
+            return true;
+        return undefined;
+    }
+    function displayTestNameFromRaw(name) {
+        let out = name;
+        if (out.startsWith('_test_'))
+            out = out.slice('_test_'.length);
+        if (out.endsWith('_wrapper'))
+            out = out.slice(0, -'_wrapper'.length);
+        return out;
+    }
+    async function findTestRangesForFile(uri) {
+        const ranges = new Map();
+        try {
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const text = doc.getText();
+            const re = /^(\s*)def\s+(_test_[A-Za-z0-9_]+)\s*\(/gm;
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const rawName = m[2];
+                const name = displayTestNameFromRaw(rawName);
+                const defOffset = m.index + (m[1]?.length || 0);
+                const pos = doc.positionAt(defOffset);
+                ranges.set(name, new vscode.Range(pos, pos));
+            }
+        }
+        catch { }
+        return ranges;
+    }
+    async function refreshRangesForModule(project, modName, uri) {
+        if (!uri)
+            return;
+        const modItem = testIndex.get(testIndexKey(project, modName));
+        if (!modItem)
+            return;
+        const ranges = await findTestRangesForFile(uri);
+        modItem.children.forEach(child => {
+            const meta = testMeta.get(child);
+            if (!meta?.name)
+                return;
+            const range = ranges.get(meta.name);
+            if (range) {
+                child.range = range;
+                const key = testIndexKey(project, modName, meta.name);
+                const entry = diagByKey.get(key);
+                if (entry) {
+                    entry.diagnostic.range = range;
+                    updateDiagnosticsForUri(entry.uri);
+                }
+            }
+            else {
+                const key = testIndexKey(project, modName, meta.name);
+                clearTestDiagnostic(key);
+            }
+        });
+    }
+    const runHandler = async (request, token) => {
+        await discoverTests(false);
+        const roots = [];
+        testController.items.forEach(item => roots.push(item));
+        const include = request.include && request.include.length > 0 ? request.include : roots;
+        const tests = collectLeafTests(include, request.exclude);
+        const currentKeys = new Set();
+        const currentProjects = new Set();
+        const run = testController.createTestRun(request, undefined, true);
+        if (tests.length === 0) {
+            run.end();
+            return;
+        }
+        tests.forEach(t => {
+            const meta = testMeta.get(t);
+            if (meta?.project)
+                currentProjects.add(meta.project);
+            if (meta?.project && meta?.module && meta?.name) {
+                currentKeys.add(testIndexKey(meta.project, meta.module, meta.name));
+            }
+            run.enqueued(t);
+            run.started(t);
+        });
+        const byProject = new Map();
+        for (const test of tests) {
+            const meta = testMeta.get(test);
+            const project = meta?.project;
+            if (!project)
+                continue;
+            const group = byProject.get(project) || [];
+            group.push(test);
+            byProject.set(project, group);
+        }
+        for (const [project, group] of byProject.entries()) {
+            const modules = new Set();
+            const names = new Set();
+            const moduleUris = new Map();
+            for (const test of group) {
+                const meta = testMeta.get(test);
+                if (meta?.module)
+                    modules.add(meta.module);
+                if (meta?.name)
+                    names.add(meta.name);
+                if (meta?.module && test.uri)
+                    moduleUris.set(meta.module, test.uri);
+            }
+            for (const modName of modules) {
+                await refreshRangesForModule(project, modName, moduleUris.get(modName));
+            }
+            const args = ['test', '--json'];
+            for (const mod of modules)
+                args.push('--module', mod);
+            for (const name of names)
+                args.push('--name', name);
+            const actonCmd = getActonCmd();
+            run.appendOutput(`$ ${actonCmd} ${args.join(' ')}\n`, undefined, group[0]);
+            const proc = (0, child_process_1.spawn)(actonCmd, args, { cwd: project, env: { ...process.env, NO_COLOR: '1' } });
+            token.onCancellationRequested(() => {
+                try {
+                    proc.kill();
+                }
+                catch { }
+            });
+            let stdout = '';
+            let stderr = '';
+            proc.stdout.on('data', d => { stdout += d.toString(); });
+            proc.stderr.on('data', d => { stderr += d.toString(); });
+            const exitCode = await new Promise((resolve) => {
+                proc.on('close', (code) => resolve(code ?? 1));
+                proc.on('error', () => resolve(1));
+            });
+            const report = parseJsonReport(stdout);
+            if (!report) {
+                run.appendOutput(stderr || stdout || 'Test run produced no JSON output.\n', undefined, group[0]);
+            }
+            const parsed = report?.tests
+                ? report.tests.reduce((acc, t) => {
+                    if (!t.module || !t.name)
+                        return acc;
+                    const byMod = acc.get(t.module) || new Map();
+                    const detailsParts = [];
+                    if (t.exception)
+                        detailsParts.push(t.exception);
+                    if (t.stdout)
+                        detailsParts.push("STDOUT:\n" + t.stdout);
+                    if (t.stderr)
+                        detailsParts.push("STDERR:\n" + t.stderr);
+                    const details = detailsParts.length > 0 ? detailsParts.join("\n") : undefined;
+                    byMod.set(t.name, { status: t.status, details });
+                    acc.set(t.module, byMod);
+                    return acc;
+                }, new Map())
+                : parseTestResultsOutput(stdout + "\n" + stderr);
+            for (const test of group) {
+                const meta = testMeta.get(test);
+                const outcome = meta?.module && meta?.name ? parsed.get(meta.module)?.get(meta.name) : undefined;
+                const status = outcome?.status;
+                const pass = statusIsPass(status);
+                if (pass === true) {
+                    run.passed(test);
+                    if (meta?.project && meta?.module && meta?.name && test.uri) {
+                        clearTestDiagnostic(testIndexKey(meta.project, meta.module, meta.name));
+                    }
+                }
+                else if (pass === false) {
+                    const msgText = outcome?.details
+                        ? outcome.details
+                        : (status ? `Test failed (${status}).` : 'Test failed.');
+                    const msg = buildTestMessage(msgText, test.uri ?? undefined, test.range ?? undefined);
+                    run.failed(test, msg);
+                    if (meta?.project && meta?.module && meta?.name && test.uri) {
+                        const range = test.range ?? new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
+                        setTestDiagnostic(testIndexKey(meta.project, meta.module, meta.name), test.uri, range, msgText);
+                    }
+                }
+                else if (exitCode === 0) {
+                    run.passed(test);
+                    if (meta?.project && meta?.module && meta?.name && test.uri) {
+                        clearTestDiagnostic(testIndexKey(meta.project, meta.module, meta.name));
+                    }
+                }
+                else {
+                    const msgText = outcome?.details ? outcome.details : 'Test failed.';
+                    const msg = buildTestMessage(msgText, test.uri ?? undefined, test.range ?? undefined);
+                    run.failed(test, msg);
+                    if (meta?.project && meta?.module && meta?.name && test.uri) {
+                        const range = test.range ?? new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0));
+                        setTestDiagnostic(testIndexKey(meta.project, meta.module, meta.name), test.uri, range, msgText);
+                    }
+                }
+            }
+        }
+        reapplyStoredFailures(run, currentKeys, currentProjects);
+        run.end();
+    };
+    const runProfile = testController.createRunProfile('Run', vscode.TestRunProfileKind.Run, runHandler);
+    context.subscriptions.push(runProfile);
+    // Gutter run icons will be provided automatically by VS Code when
+    // tests have a uri + range set.
     async function buildActiveFile() {
         const ed = vscode.window.activeTextEditor;
         if (!ed || ed.document.languageId !== 'acton') {
