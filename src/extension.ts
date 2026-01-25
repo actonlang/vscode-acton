@@ -465,69 +465,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   type TestOutcome = { status?: string; details?: string };
 
-  function parseTestResultsOutput(text: string): Map<string, Map<string, TestOutcome>> {
-    const result = new Map<string, Map<string, TestOutcome>>();
-    let currentModule: string | undefined;
-    let currentTest: string | undefined;
-    let currentStatus: string | undefined;
-    let detailLines: string[] = [];
-
-    const flush = () => {
-      if (currentModule && currentTest) {
-        if (!result.has(currentModule)) result.set(currentModule, new Map());
-        const details = detailLines.join('\n').replace(/\s+$/g, '');
-        result.get(currentModule)!.set(currentTest, {
-          status: currentStatus,
-          details: details.length > 0 ? details : undefined
-        });
-      }
-      currentTest = undefined;
-      currentStatus = undefined;
-      detailLines = [];
-    };
-
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.replace(/\s+$/, '');
-      const modMatch = line.match(/^Tests - module (.+):\s*$/);
-      if (modMatch) {
-        flush();
-        currentModule = modMatch[1].trim();
-        continue;
-      }
-      const testMatch = line.match(/^\s+(.+?):\s+(.*?)\s*:\s*\d+\s+runs in/);
-      if (testMatch) {
-        flush();
-        let name = testMatch[1].trim();
-        let statusRaw = testMatch[2].trim().replace(/\s+/g, ' ');
-        statusRaw = statusRaw.replace(/^CACHED\s+/i, '');
-        statusRaw = statusRaw.replace(/\*$/, '');
-        let moduleForTest = currentModule;
-        if (!moduleForTest) {
-          const dotIdx = name.indexOf('.');
-          if (dotIdx > 0) {
-            moduleForTest = name.slice(0, dotIdx);
-            name = name.slice(dotIdx + 1);
-          }
-        }
-        currentModule = moduleForTest;
-        currentTest = name;
-        currentStatus = statusRaw;
-        continue;
-      }
-      const summaryMatch = line.match(/^(All \d+ tests passed|\d+ out of \d+ tests|Nothing to test)/);
-      if (summaryMatch) {
-        flush();
-        currentModule = undefined;
-        continue;
-      }
-      if (currentTest) {
-        detailLines.push(line);
-      }
-    }
-    flush();
-    return result;
-  }
-
   type JsonTestResult = {
     module: string;
     name: string;
@@ -538,8 +475,7 @@ export function activate(context: vscode.ExtensionContext) {
     iterations?: number;
     duration_ms?: number;
     exception?: string | null;
-    stdout?: string | null;
-    stderr?: string | null;
+    output?: string | null;
   };
   type JsonReport = {
     summary?: { total?: number; failures?: number; errors?: number; elapsed_ms?: number };
@@ -687,26 +623,33 @@ export function activate(context: vscode.ExtensionContext) {
       });
 
       const report = parseJsonReport(stdout);
-      if (!report) {
+      if (!report?.tests) {
         run.appendOutput(stderr || stdout || 'Test run produced no JSON output.\n', undefined, group[0]);
+        for (const test of group) {
+          const msg = buildTestMessage('actonc test --json did not return JSON output.', test.uri ?? undefined, test.range ?? undefined);
+          run.errored(test, msg);
+        }
+        continue;
       }
-      const parsed = report?.tests
-        ? report.tests.reduce((acc, t) => {
-            if (!t.module || !t.name) return acc;
-            const byMod = acc.get(t.module) || new Map<string, TestOutcome>();
-            const detailsParts: string[] = [];
-            if (t.exception) detailsParts.push(t.exception);
-            if (t.stdout) detailsParts.push("STDOUT:\n" + t.stdout);
-            if (t.stderr) detailsParts.push("STDERR:\n" + t.stderr);
-            const details = detailsParts.length > 0 ? detailsParts.join("\n") : undefined;
-            byMod.set(t.name, { status: t.status, details });
-            acc.set(t.module, byMod);
-            return acc;
-          }, new Map<string, Map<string, TestOutcome>>())
-        : parseTestResultsOutput(stdout + "\n" + stderr);
+      const parsed = report.tests.reduce((acc, t) => {
+        if (!t.module || !t.name) return acc;
+        const byMod = acc.get(t.module) || new Map<string, TestOutcome>();
+        const detailsParts: string[] = [];
+        if (t.exception) detailsParts.push(t.exception);
+        if (t.output) detailsParts.push(t.output);
+        const details = detailsParts.length > 0 ? detailsParts.join("\n") : undefined;
+        byMod.set(t.name, { status: t.status, details });
+        acc.set(t.module, byMod);
+        return acc;
+      }, new Map<string, Map<string, TestOutcome>>());
       for (const test of group) {
         const meta = testMeta.get(test);
         const outcome = meta?.module && meta?.name ? parsed.get(meta.module)?.get(meta.name) : undefined;
+        if (!outcome) {
+          const msg = buildTestMessage('Missing test result in actonc JSON output.', test.uri ?? undefined, test.range ?? undefined);
+          run.errored(test, msg);
+          continue;
+        }
         const status = outcome?.status;
         const pass = statusIsPass(status);
         if (pass === true) {
