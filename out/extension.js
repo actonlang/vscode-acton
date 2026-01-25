@@ -305,32 +305,41 @@ function activate(context) {
         catch { }
         return undefined;
     }
-    function parseTestListOutput(text) {
+    function parseTestListJson(text) {
+        const trimmed = text.trim();
+        if (!trimmed)
+            return new Map();
+        let data;
+        try {
+            data = JSON.parse(trimmed);
+        }
+        catch {
+            const first = trimmed.indexOf('{');
+            const last = trimmed.lastIndexOf('}');
+            if (first >= 0 && last > first) {
+                try {
+                    data = JSON.parse(trimmed.slice(first, last + 1));
+                }
+                catch { }
+            }
+        }
+        if (!data)
+            return undefined;
+        if (!data.modules)
+            return new Map();
         const modules = new Map();
-        let current;
-        for (const raw of text.split(/\r?\n/)) {
-            const line = raw.replace(/\s+$/, '');
-            if (!line)
+        for (const mod of data.modules) {
+            if (!mod?.name)
                 continue;
-            const modMatch = line.match(/^Module\s+(.+):$/);
-            if (modMatch) {
-                current = modMatch[1].trim();
-                if (!modules.has(current))
-                    modules.set(current, []);
-                continue;
-            }
-            if (current && /^\s+/.test(line)) {
-                const entry = line.trim();
-                const label = entry.replace(/\s+\([^)]*\)\s*$/, '');
-                modules.get(current).push(label);
-            }
+            const names = (mod.tests || []).map(t => t.name).filter(Boolean);
+            modules.set(mod.name, names);
         }
         return modules;
     }
     async function runActonTestList(cwd) {
         const actonCmd = getActonCmd();
         return new Promise((resolve, reject) => {
-            const proc = (0, child_process_1.spawn)(actonCmd, ['test', 'list'], { cwd, env: { ...process.env, NO_COLOR: '1' } });
+            const proc = (0, child_process_1.spawn)(actonCmd, ['test', 'list', '--json'], { cwd, env: { ...process.env, NO_COLOR: '1' } });
             let out = '';
             let err = '';
             proc.stdout.on('data', d => { out += d.toString(); });
@@ -439,7 +448,11 @@ function activate(context) {
                     log.appendLine(`[test] discovery failed in ${projRoot}: ${e?.message || e}`);
                     continue;
                 }
-                const modules = parseTestListOutput(output);
+                const modules = parseTestListJson(output);
+                if (!modules) {
+                    log.appendLine(`[test] discovery failed in ${projRoot}: actonc test list --json did not return JSON`);
+                    continue;
+                }
                 if (modules.size === 0)
                     continue;
                 const rootKey = testIndexKey(projRoot);

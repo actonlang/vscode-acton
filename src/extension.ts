@@ -245,23 +245,32 @@ export function activate(context: vscode.ExtensionContext) {
     return undefined;
   }
 
-  function parseTestListOutput(text: string): Map<string, string[]> {
+  type JsonTestList = {
+    modules?: { name: string; tests?: { name: string; raw_name?: string }[] }[];
+  };
+
+  function parseTestListJson(text: string): Map<string, string[]> | undefined {
+    const trimmed = text.trim();
+    if (!trimmed) return new Map();
+    let data: JsonTestList | undefined;
+    try {
+      data = JSON.parse(trimmed) as JsonTestList;
+    } catch {
+      const first = trimmed.indexOf('{');
+      const last = trimmed.lastIndexOf('}');
+      if (first >= 0 && last > first) {
+        try {
+          data = JSON.parse(trimmed.slice(first, last + 1)) as JsonTestList;
+        } catch {}
+      }
+    }
+    if (!data) return undefined;
+    if (!data.modules) return new Map();
     const modules = new Map<string, string[]>();
-    let current: string | undefined;
-    for (const raw of text.split(/\r?\n/)) {
-      const line = raw.replace(/\s+$/, '');
-      if (!line) continue;
-      const modMatch = line.match(/^Module\s+(.+):$/);
-      if (modMatch) {
-        current = modMatch[1].trim();
-        if (!modules.has(current)) modules.set(current, []);
-        continue;
-      }
-      if (current && /^\s+/.test(line)) {
-        const entry = line.trim();
-        const label = entry.replace(/\s+\([^)]*\)\s*$/, '');
-        modules.get(current)!.push(label);
-      }
+    for (const mod of data.modules) {
+      if (!mod?.name) continue;
+      const names = (mod.tests || []).map(t => t.name).filter(Boolean) as string[];
+      modules.set(mod.name, names);
     }
     return modules;
   }
@@ -269,7 +278,7 @@ export function activate(context: vscode.ExtensionContext) {
   async function runActonTestList(cwd: string): Promise<string> {
     const actonCmd = getActonCmd();
     return new Promise((resolve, reject) => {
-      const proc = spawn(actonCmd, ['test', 'list'], { cwd, env: { ...process.env, NO_COLOR: '1' } });
+      const proc = spawn(actonCmd, ['test', 'list', '--json'], { cwd, env: { ...process.env, NO_COLOR: '1' } });
       let out = '';
       let err = '';
       proc.stdout.on('data', d => { out += d.toString(); });
@@ -373,7 +382,11 @@ export function activate(context: vscode.ExtensionContext) {
           continue;
         }
 
-        const modules = parseTestListOutput(output);
+        const modules = parseTestListJson(output);
+        if (!modules) {
+          log.appendLine(`[test] discovery failed in ${projRoot}: actonc test list --json did not return JSON`);
+          continue;
+        }
         if (modules.size === 0) continue;
         const rootKey = testIndexKey(projRoot);
         const rootItem = upsertItem(rootKey, () =>
