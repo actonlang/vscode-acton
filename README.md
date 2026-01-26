@@ -28,6 +28,13 @@ Install from the VS Code Extension marketplace.
 
 ## Release Notes
 
+### 0.7.0
+
+- Integrated testing support
+  - Discovers test in a project
+  - Allow running individual test, tests in a module or whole project
+  - Test errors are displayed inline through a widget
+
 ### 0.6.0
 
 - Auto-load Acton LLDB plugin for pretty printing
